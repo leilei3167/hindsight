@@ -29,6 +29,26 @@ describe("deriveBankId", () => {
     expect(deriveBankId({}, "/home/me/dev/myrepo-feature-wt")).toBe("coding-agent::myrepo");
   });
 
+  it("retries a transient git probe and still shares the main worktree bank", () => {
+    let n = 0;
+    mockExec.mockImplementation(() => {
+      n += 1;
+      if (n < 3) {
+        throw Object.assign(new Error("spawnSync git ETIMEDOUT"), { code: "ETIMEDOUT" });
+      }
+      return "/home/me/dev/myrepo/.git\n";
+    });
+    expect(deriveBankId({}, "/home/me/dev/myrepo-wt2")).toBe("coding-agent::myrepo");
+    expect(n).toBe(3);
+  });
+
+  it("does not invent a worktree bank when the git probe keeps failing", () => {
+    mockExec.mockImplementation(() => {
+      throw Object.assign(new Error("spawnSync git ETIMEDOUT"), { code: "ETIMEDOUT" });
+    });
+    expect(deriveBankId({}, "/home/me/dev/myrepo-wt2")).toBe("");
+  });
+
   it("uses the bare-repo directory name when common-dir is not .git", () => {
     mockExec.mockReturnValue("/srv/git/myrepo.git\n");
     expect(deriveBankId({}, "/srv/git/myrepo.git")).toBe("coding-agent::myrepo.git");

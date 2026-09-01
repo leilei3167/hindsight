@@ -25,6 +25,8 @@ import { execFileSync } from "node:child_process";
 import { existsSync } from "node:fs";
 import { homedir } from "node:os";
 import { basename, dirname, join, normalize, sep } from "node:path";
+import { diag } from "./diag";
+import { log } from "./log";
 import { applyTemplate } from "./template";
 
 export interface BankConfig {
@@ -44,37 +46,86 @@ const DEFAULT_BANK_NAME = "coding";
 // split memory per agent, defeating cross-agent sharing).
 const DEFAULT_TEMPLATE = "coding-agent::{gitProject}";
 
+const GIT_PROBE_ATTEMPTS = 3;
+const GIT_PROBE_TIMEOUT_MS = 1000;
+
+type GitRootProbe =
+  | { status: "root"; root: string }
+  | { status: "not-git" }
+  | { status: "probe-failed"; error: string };
+
+function errorCode(err: unknown): string {
+  return typeof err === "object" && err && "code" in err ? String((err as { code: unknown }).code) : "";
+}
+
+function errorStatus(err: unknown): number | undefined {
+  if (typeof err === "object" && err && "status" in err) {
+    const status = (err as { status: unknown }).status;
+    return typeof status === "number" ? status : undefined;
+  }
+  return undefined;
+}
+
+function errorMessage(err: unknown): string {
+  return err instanceof Error ? err.message : String(err);
+}
+
+function isNotGitRepoError(err: unknown): boolean {
+  return /not a git repository/i.test(errorMessage(err)) || errorStatus(err) === 128;
+}
+
+function isTransientGitProbeError(err: unknown): boolean {
+  const code = errorCode(err);
+  return code === "ETIMEDOUT" || code === "EAGAIN" || code === "ENOMEM";
+}
+
+function rootFromCommonDir(commonDir: string): string {
+  // Clones + `git worktree add`: common-dir is `<main root>/.git`.
+  if (basename(commonDir) === ".git") return dirname(commonDir);
+
+  // A bare-hub keeps its bare repository in a hidden plumbing directory (usually `.bare`),
+  // while a standalone bare clone uses its directory name as the project identity. Check the
+  // common dir itself because a linked worktree reports `false` for --is-bare-repository.
+  if (basename(commonDir).startsWith(".") && isBareRepository(commonDir)) {
+    return dirname(commonDir);
+  }
+
+  // Preserve the historical name for standalone bare repositories such as `myrepo.git`.
+  return commonDir;
+}
+
+function probeGitRoot(directory: string): GitRootProbe {
+  if (!directory) return { status: "not-git" };
+  let lastErr: unknown;
+  for (let attempt = 1; attempt <= GIT_PROBE_ATTEMPTS; attempt++) {
+    try {
+      const commonDir = execFileSync(
+        "git",
+        ["rev-parse", "--path-format=absolute", "--git-common-dir"],
+        {
+          cwd: directory,
+          encoding: "utf-8",
+          stdio: ["ignore", "pipe", "ignore"],
+          timeout: GIT_PROBE_TIMEOUT_MS,
+          windowsHide: true,
+        }
+      ).trim();
+      if (!commonDir) return { status: "not-git" };
+      return { status: "root", root: rootFromCommonDir(commonDir) };
+    } catch (err) {
+      lastErr = err;
+      if (isNotGitRepoError(err)) return { status: "not-git" };
+      if (isTransientGitProbeError(err) && attempt < GIT_PROBE_ATTEMPTS) continue;
+      break;
+    }
+  }
+  return { status: "probe-failed", error: errorMessage(lastErr) };
+}
+
 /** Main-worktree root for a directory inside a git repo (worktree- and bare-repo-aware), else null. */
 export function getProjectRootFromGit(directory: string): string | null {
-  if (!directory) return null;
-  try {
-    const commonDir = execFileSync(
-      "git",
-      ["rev-parse", "--path-format=absolute", "--git-common-dir"],
-      {
-        cwd: directory,
-        encoding: "utf-8",
-        stdio: ["ignore", "pipe", "ignore"],
-        timeout: 1000,
-        windowsHide: true,
-      }
-    ).trim();
-    if (!commonDir) return null;
-    // Clones + `git worktree add`: common-dir is `<main root>/.git`.
-    if (basename(commonDir) === ".git") return dirname(commonDir);
-
-    // A bare-hub keeps its bare repository in a hidden plumbing directory (usually `.bare`),
-    // while a standalone bare clone uses its directory name as the project identity. Check the
-    // common dir itself because a linked worktree reports `false` for --is-bare-repository.
-    if (basename(commonDir).startsWith(".") && isBareRepository(commonDir)) {
-      return dirname(commonDir);
-    }
-
-    // Preserve the historical name for standalone bare repositories such as `myrepo.git`.
-    return commonDir;
-  } catch {
-    return null;
-  }
+  const probe = probeGitRoot(directory);
+  return probe.status === "root" ? probe.root : null;
 }
 
 function isBareRepository(commonDir: string): boolean {
@@ -153,23 +204,39 @@ function dirName(directory: string): string {
  * exported roots are a last rescue, not a new source of truth — and both name the CURRENT
  * session's own project, so neither can reach a repo this session was not already working in.
  */
-function mainWorktreeRoot(directory: string, sessionRoot = ""): string | null {
+function mainWorktreeProbe(directory: string, sessionRoot = ""): GitRootProbe {
   const candidates = [
     nearestExistingDir(directory),
     sessionRoot,
     ...PROJECT_ROOT_ENV.map((v) => process.env[v] || ""),
   ];
+  let failed: GitRootProbe | undefined;
   for (const candidate of candidates) {
-    const root = candidate ? getProjectRootFromGit(candidate) : null;
-    if (root) return root;
+    if (!candidate) continue;
+    const probe = probeGitRoot(candidate);
+    if (probe.status === "root") return probe;
+    if (probe.status === "probe-failed") failed = probe;
   }
-  return null;
+  return failed ?? { status: "not-git" };
+}
+
+function mainWorktreeRoot(directory: string, sessionRoot = ""): string | null {
+  const probe = mainWorktreeProbe(directory, sessionRoot);
+  return probe.status === "root" ? probe.root : null;
 }
 
 function gitProjectName(directory: string, resolveWorktrees: boolean, sessionRoot = ""): string {
   if (resolveWorktrees) {
-    const root = mainWorktreeRoot(directory, sessionRoot);
-    if (root) return basename(root);
+    const probe = mainWorktreeProbe(directory, sessionRoot);
+    if (probe.status === "root") return basename(probe.root);
+    if (probe.status === "probe-failed") {
+      log.warn("bank", "git probe failed; not guessing a bank id from the directory basename", {
+        directory,
+        error: probe.error,
+      });
+      diag("bank", "git-probe-failed", { directory, error: probe.error });
+      return "";
+    }
   }
   // Nothing git can name. `directory` is the agent's LIVE working directory and it moves during
   // normal work; inside a repo that was harmless because every subdirectory resolved back to the
@@ -275,10 +342,15 @@ export function deriveBankId(
   const dynamic = config.dynamicBankId ?? !config.bankId;
   if (!dynamic) return config.bankId || DEFAULT_BANK_NAME;
 
+  const gitProject = gitProjectName(directory, config.resolveWorktrees ?? true, sessionRoot);
+  // A failed git probe must not fall through to the worktree basename — that is how linked
+  // worktrees silently fork a new bank (#3950). Skip retain instead.
+  if ((config.resolveWorktrees ?? true) && gitProject === "") return "";
+
   const resolvers: Record<string, () => string> = {
     harness: () => harness,
     project: () => dirName(directory),
-    gitProject: () => gitProjectName(directory, config.resolveWorktrees ?? true, sessionRoot),
+    gitProject: () => gitProject,
     channel: () => process.env.HINDSIGHT_CHANNEL_ID || "default",
     user: () => process.env.HINDSIGHT_USER_ID || "anonymous",
   };

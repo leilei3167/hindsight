@@ -30,7 +30,7 @@ import type { Config } from "./config";
 import { deriveBankId } from "./bank";
 import { brandWord } from "./brand";
 import { diag } from "./diag";
-import { setLogLevel } from "./log";
+import { log, setLogLevel } from "./log";
 import { parsePageList, buildKnowledgePreamble, type PageRef } from "./knowledge-injection";
 import type { ClientOpts, RetainOpts } from "./hindsight";
 import { buildRetainStamp } from "./retain-stamp";
@@ -356,7 +356,12 @@ export async function runSessionStartHook(
     // Recorded HERE, on the session's first hook, so every later hook of this session resolves the
     // same bank however far the agent navigates (#3563).
     const sessionRoot = sessionRootDir(harness, sessionId, cwd);
-    const resolved = applyBankConfig(cfg, deriveBankId(cfg, cwd, harness, sessionRoot), cwd);
+    const bankIdOrEmpty = deriveBankId(cfg, cwd, harness, sessionRoot);
+    if (!bankIdOrEmpty) {
+      log.warn(harness, "session start skipped: git probe failed, not inventing a bank id");
+      return;
+    }
+    const resolved = applyBankConfig(cfg, bankIdOrEmpty, cwd);
     cfg = resolved.cfg;
     const bankId = resolved.bankId;
     if (cfg.disabled) return; // per-bank opt-out (banks.<id> override)

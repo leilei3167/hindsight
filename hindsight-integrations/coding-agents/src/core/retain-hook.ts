@@ -136,7 +136,12 @@ export async function runRetainHook(
   if (!transcriptPath) return;
 
   const sessionRoot = sessionRootDir(spec.harness, sessionId, cwd);
-  const resolved = applyBankConfig(cfg, deriveBankId(cfg, cwd, spec.harness, sessionRoot), cwd);
+  const bankIdOrEmpty = deriveBankId(cfg, cwd, spec.harness, sessionRoot);
+  if (!bankIdOrEmpty) {
+    log.warn(spec.harness, "retain skipped: git probe failed, not inventing a bank id");
+    return;
+  }
+  const resolved = applyBankConfig(cfg, bankIdOrEmpty, cwd);
   cfg = resolved.cfg;
   const bankId = resolved.bankId;
   if (cfg.disabled) return; // per-bank opt-out (banks.<id> override)

@@ -241,7 +241,12 @@ export async function runHook(
     process.stdout.write(JSON.stringify(spec.emit(context ?? "", notice, ev)));
 
   const sessionRoot = sessionRootDir(spec.harness, sessionId, cwd);
-  const resolved = applyBankConfig(cfg, deriveBankId(cfg, cwd, spec.harness, sessionRoot), cwd);
+  const bankIdOrEmpty = deriveBankId(cfg, cwd, spec.harness, sessionRoot);
+  if (!bankIdOrEmpty) {
+    log.warn(spec.harness, "hook skipped: git probe failed, not inventing a bank id");
+    return;
+  }
+  const resolved = applyBankConfig(cfg, bankIdOrEmpty, cwd);
   cfg = resolved.cfg;
   const bankId = resolved.bankId;
   if (cfg.disabled) {
