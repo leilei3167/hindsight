@@ -149,9 +149,7 @@ def assess_ocr_output_quality(text: str) -> OcrQualityResult:
     unclear_char_span = unclear_count * len(_UNCLEAR_TOKEN)
     unclear_ratio = (unclear_char_span / char_count) if char_count else 0.0
     replacement_ratio = (replacement_count / char_count) if char_count else 0.0
-    repetition_ratio = (
-        1.0 - (unique_word_count / word_count) if word_count else 0.0
-    )
+    repetition_ratio = 1.0 - (unique_word_count / word_count) if word_count else 0.0
     timestamp_hits = len(_TIMESTAMP_RE.findall(normalized))
     chrome_hits = sum(1 for w in words if w in _UI_CHROME_WORDS)
     chrome_ratio = (chrome_hits / word_count) if word_count else 0.0

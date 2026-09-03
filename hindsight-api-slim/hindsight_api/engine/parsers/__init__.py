@@ -135,8 +135,7 @@ class FileParserRegistry:
                             quality.measurements,
                         )
                         last_error = RuntimeError(
-                            f"Parser '{name}' OCR output rejected for '{filename}': "
-                            f"reasons={list(quality.reasons)}"
+                            f"Parser '{name}' OCR output rejected for '{filename}': reasons={list(quality.reasons)}"
                         )
                         continue
 

@@ -45,10 +45,7 @@ def test_hard_reject_dominated_by_unclear():
 def test_hard_reject_replacement_chars():
     result = assess_ocr_output_quality("\ufffd\ufffd\ufffd\ufffd\ufffd")
     assert result.accepted is False
-    assert (
-        "dominated_by_replacement_chars" in result.reasons
-        or "zero_meaningful_tokens" in result.reasons
-    )
+    assert "dominated_by_replacement_chars" in result.reasons or "zero_meaningful_tokens" in result.reasons
 
 
 def test_hard_reject_zero_meaningful_tokens():
@@ -99,8 +96,7 @@ def test_accept_error_code():
 
 def test_accept_normal_paragraph():
     text = (
-        "Invoice #1042 for Acme Corp. Total due is $1,280.00 by March 15. "
-        "Please remit payment to the address on file."
+        "Invoice #1042 for Acme Corp. Total due is $1,280.00 by March 15. Please remit payment to the address on file."
     )
     result = assess_ocr_output_quality(text)
     assert result.accepted is True
