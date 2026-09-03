@@ -25,7 +25,6 @@ from .prompts import (
     _extract_directive_rules,
     build_agent_user_prompt,
     build_chunk_claims_prompt,
-    build_final_prompt,
     build_final_system_prompt,
     build_reduce_prompt,
     build_stable_synthesis_nudge,
