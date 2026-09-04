@@ -559,7 +559,6 @@ def test_posix_popen_redirects_stdout_stderr_to_log(temp_home, monkeypatch):
     )
 
 
-
 def test_get_config_and_daemon_env_include_llm_base_url(temp_home, monkeypatch):
     """Regression test for issue #4094.
 
