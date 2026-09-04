@@ -223,6 +223,7 @@ def test_get_config_respects_profile(temp_home, monkeypatch):
         "HINDSIGHT_API_LLM_PROVIDER=anthropic\n"
         "HINDSIGHT_API_LLM_MODEL=claude-sonnet-4-20250514\n"
         "HINDSIGHT_API_LLM_API_KEY=sk-ant-production\n"
+        "HINDSIGHT_API_LLM_BASE_URL=https://custom.example/v1\n"
     )
 
     # Create metadata
@@ -245,6 +246,7 @@ def test_get_config_respects_profile(temp_home, monkeypatch):
     monkeypatch.delenv("HINDSIGHT_API_LLM_PROVIDER", raising=False)
     monkeypatch.delenv("HINDSIGHT_API_LLM_MODEL", raising=False)
     monkeypatch.delenv("HINDSIGHT_API_LLM_API_KEY", raising=False)
+    monkeypatch.delenv("HINDSIGHT_API_LLM_BASE_URL", raising=False)
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
 
     # Test with named profile
@@ -255,6 +257,7 @@ def test_get_config_respects_profile(temp_home, monkeypatch):
     assert config["llm_provider"] == "anthropic", "Should use profile's provider"
     assert config["llm_model"] == "claude-sonnet-4-20250514", "Should use profile's model"
     assert config["llm_api_key"] == "sk-ant-production", "Should use profile's API key"
+    assert config["llm_base_url"] == "https://custom.example/v1", "Should use profile's base URL"
 
 
 def test_profile_env_propagates_arbitrary_hindsight_keys_to_daemon(temp_home, monkeypatch):
@@ -554,6 +557,114 @@ def test_posix_popen_redirects_stdout_stderr_to_log(temp_home, monkeypatch):
     assert stderr is not None and hasattr(stderr, "write"), (
         f"daemon stderr must be redirected to a file handle, got {stderr!r}"
     )
+
+
+
+def test_get_config_and_daemon_env_include_llm_base_url(temp_home, monkeypatch):
+    """Regression test for issue #4094.
+
+    Profile .env KEY/MODEL/BASE_URL must all reach get_config() and the daemon
+    subprocess env. Previously get_config() omitted llm_base_url, so openai-
+    compatible clients fell back to api.openai.com (401) while key/model worked.
+    """
+    import json
+    from unittest.mock import MagicMock, patch
+
+    from hindsight_embed.cli import get_config, set_cli_profile_override
+    from hindsight_embed.daemon_embed_manager import DaemonEmbedManager
+
+    set_cli_profile_override(None)
+    monkeypatch.delenv("HINDSIGHT_EMBED_PROFILE", raising=False)
+    for key in (
+        "HINDSIGHT_API_LLM_PROVIDER",
+        "HINDSIGHT_API_LLM_MODEL",
+        "HINDSIGHT_API_LLM_API_KEY",
+        "HINDSIGHT_API_LLM_BASE_URL",
+        "OPENAI_API_KEY",
+    ):
+        monkeypatch.delenv(key, raising=False)
+
+    profile_dir = temp_home / ".hindsight" / "profiles"
+    profile_dir.mkdir(parents=True, exist_ok=True)
+    profile_name = "hermes"
+    base_url = "https://maas-api.example.com/openapi/compatible-mode/v1"
+    (profile_dir / f"{profile_name}.env").write_text(
+        "HINDSIGHT_API_LLM_PROVIDER=openai\n"
+        "HINDSIGHT_API_LLM_API_KEY=sk-profile-key\n"
+        "HINDSIGHT_API_LLM_MODEL=qwen3.8-27b\n"
+        f"HINDSIGHT_API_LLM_BASE_URL={base_url}\n"
+    )
+    (profile_dir / "metadata.json").write_text(
+        json.dumps(
+            {
+                "version": 1,
+                "profiles": {
+                    profile_name: {
+                        "port": 9876,
+                        "created_at": "2024-01-01T00:00:00+00:00",
+                        "last_used": "2024-01-01T00:00:00+00:00",
+                    }
+                },
+            }
+        )
+    )
+
+    set_cli_profile_override(profile_name)
+    config = get_config()
+    assert config["llm_api_key"] == "sk-profile-key"
+    assert config["llm_provider"] == "openai"
+    assert config["llm_model"] == "qwen3.8-27b"
+    assert config["llm_base_url"] == base_url
+
+    manager = DaemonEmbedManager()
+    captured: dict[str, dict[str, str]] = {}
+    popen_called = [False]
+
+    def fake_popen(cmd, env, **kwargs):
+        captured["env"] = env
+        popen_called[0] = True
+        proc = MagicMock()
+        proc.pid = 12345
+        return proc
+
+    def fake_is_running(profile=""):
+        return popen_called[0]
+
+    with (
+        patch("hindsight_embed.daemon_embed_manager.subprocess.Popen", side_effect=fake_popen),
+        patch("hindsight_embed.daemon_embed_manager.time.sleep"),
+        patch.object(manager, "_clear_port", return_value=True),
+        patch.object(manager, "_find_api_command", return_value=["hindsight-api"]),
+        patch.object(manager, "is_running", side_effect=fake_is_running),
+        patch("hindsight_embed.daemon_embed_manager.platform.system", return_value="Linux"),
+    ):
+        manager._start_daemon(config=config, profile=profile_name)
+
+    env = captured["env"]
+    assert env.get("HINDSIGHT_API_LLM_API_KEY") == "sk-profile-key"
+    assert env.get("HINDSIGHT_API_LLM_MODEL") == "qwen3.8-27b"
+    assert env.get("HINDSIGHT_API_LLM_BASE_URL") == base_url
+    assert env.get("HINDSIGHT_API_LLM_BASE_URL") != "https://api.openai.com/v1"
+
+
+def test_configure_from_env_persists_llm_base_url(temp_home, monkeypatch):
+    """Non-interactive configure must write HINDSIGHT_API_LLM_BASE_URL when set."""
+    from hindsight_embed import cli
+
+    config_dir = temp_home / ".hindsight"
+    monkeypatch.setattr(cli, "CONFIG_DIR", config_dir)
+    monkeypatch.setattr(cli, "CONFIG_FILE", config_dir / "embed")
+
+    monkeypatch.setenv("HINDSIGHT_API_LLM_PROVIDER", "openai")
+    monkeypatch.setenv("HINDSIGHT_API_LLM_API_KEY", "sk-test")
+    monkeypatch.setenv("HINDSIGHT_API_LLM_MODEL", "my-model")
+    monkeypatch.setenv("HINDSIGHT_API_LLM_BASE_URL", "https://llm.example/v1")
+
+    assert cli._do_configure_from_env() == 0
+    contents = (config_dir / "embed").read_text()
+    assert "HINDSIGHT_API_LLM_BASE_URL=https://llm.example/v1" in contents
+    assert "HINDSIGHT_API_LLM_MODEL=my-model" in contents
+    assert "HINDSIGHT_API_LLM_API_KEY=sk-test" in contents
 
 
 def test_get_config_does_not_default_llm_model(temp_home, monkeypatch):

@@ -14,6 +14,7 @@ Environment variables:
     HINDSIGHT_API_LLM_API_KEY: Required when the selected LLM provider uses an API key.
     HINDSIGHT_API_LLM_PROVIDER: Optional. LLM provider (default: "openai").
     HINDSIGHT_API_LLM_MODEL: Optional. LLM model (default: provider-specific, resolved by hindsight-api).
+    HINDSIGHT_API_LLM_BASE_URL: Optional. OpenAI-compatible API base URL (custom endpoints).
     HINDSIGHT_EMBED_API_URL: Optional. Use external API server instead of starting local daemon.
     HINDSIGHT_EMBED_API_TOKEN: Optional. Authentication token for external API (sent as Bearer token).
     HINDSIGHT_EMBED_API_DATABASE_URL: Optional. Database URL for daemon (default: "pg0://hindsight-embed").
@@ -123,6 +124,10 @@ def get_config():
     provider-keyed default itself. Duplicating that table here would silently
     desync, and importing it from `hindsight_api.config` fails in standalone
     venvs (e.g. `uvx hindsight-embed`) where `hindsight-api` isn't installed.
+
+    `llm_base_url` is included when `HINDSIGHT_API_LLM_BASE_URL` is set so
+    openai-compatible / custom endpoints from a profile .env reach the daemon
+    the same way key/provider/model do (see issue #4094).
     """
     load_config_file()
     provider = os.environ.get("HINDSIGHT_API_LLM_PROVIDER", "openai")
@@ -134,6 +139,7 @@ def get_config():
         ),
         "llm_provider": provider,
         "llm_model": os.environ.get("HINDSIGHT_API_LLM_MODEL"),
+        "llm_base_url": os.environ.get("HINDSIGHT_API_LLM_BASE_URL"),
     }
 
 
@@ -236,12 +242,15 @@ def _do_configure_from_env():
         return 1
 
     model = os.environ.get("HINDSIGHT_API_LLM_MODEL")
+    llm_base_url = os.environ.get("HINDSIGHT_API_LLM_BASE_URL")
 
     print()
-    print("\033[1m\033[36m  Hindsight Embed - Non-interactive Configuration\033[0m")
+    print("[1m[36m  Hindsight Embed - Non-interactive Configuration[0m")
     print()
-    print(f"  \033[2mProvider:\033[0m {provider}")
-    print(f"  \033[2mModel:\033[0m {model or '(provider default)'}")
+    print(f"  [2mProvider:[0m {provider}")
+    if llm_base_url:
+        print(f"  [2mEndpoint:[0m {llm_base_url}")
+    print(f"  [2mModel:[0m {model or '(provider default)'}")
 
     # Save configuration
     CONFIG_DIR.mkdir(parents=True, exist_ok=True)
@@ -251,6 +260,8 @@ def _do_configure_from_env():
         config_values["HINDSIGHT_API_LLM_MODEL"] = model
     if api_key:
         config_values["HINDSIGHT_API_LLM_API_KEY"] = api_key
+    if llm_base_url:
+        config_values["HINDSIGHT_API_LLM_BASE_URL"] = llm_base_url
 
     from .env_template import render_config
 
@@ -419,6 +430,8 @@ def _do_configure_interactive(profile_name: str | None = None, port: int | None 
     # Save configuration
     CONFIG_DIR.mkdir(parents=True, exist_ok=True)
 
+    llm_base_url = os.environ.get("HINDSIGHT_API_LLM_BASE_URL")
+
     config_dict = {
         "HINDSIGHT_API_LLM_PROVIDER": provider,
     }
@@ -426,6 +439,8 @@ def _do_configure_interactive(profile_name: str | None = None, port: int | None 
         config_dict["HINDSIGHT_API_LLM_MODEL"] = model
     if api_key:
         config_dict["HINDSIGHT_API_LLM_API_KEY"] = api_key
+    if llm_base_url:
+        config_dict["HINDSIGHT_API_LLM_BASE_URL"] = llm_base_url
 
     if profile_name:
         # Create named profile
@@ -458,6 +473,8 @@ def _do_configure_interactive(profile_name: str | None = None, port: int | None 
         "llm_provider": provider,
         "llm_model": model,
     }
+    if llm_base_url:
+        new_config["llm_base_url"] = llm_base_url
     if daemon_client.ensure_daemon_running(new_config, daemon_profile):
         print("  \033[32m✓ Daemon started\033[0m")
     else:
