@@ -137,6 +137,8 @@ const liveAgents = new Map<string, DshAgent>();
  * which is exactly the alpha.4 breakage when callers still read `events` alone.
  */
 export function dshSessionEvents(session: {
+  /** Present on real agents; kept optional so unit tests can pass a bare accessor mock. */
+  header?: { readonly id?: string; readonly cwd?: string; readonly origin?: string };
   snapshotEvents?: () => readonly DshSessionEvent[];
   events?: readonly DshSessionEvent[];
 }): readonly DshSessionEvent[] {
