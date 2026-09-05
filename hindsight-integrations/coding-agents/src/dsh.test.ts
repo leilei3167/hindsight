@@ -149,7 +149,6 @@ describe("dsh session start", () => {
   });
 });
 
-
 describe("dshSessionEvents (alpha.4+ transcript source)", () => {
   const sampleEvents = [
     {

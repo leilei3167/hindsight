@@ -130,7 +130,6 @@ const workspaces = new Map<string, Workspace | null>();
  */
 const liveAgents = new Map<string, DshAgent>();
 
-
 /**
  * Prefer `session.snapshotEvents()` (DeepSeek Harness alpha.4+); fall back to the legacy
  * `session.events` property so older hosts keep working. Missing both yields an empty log —
