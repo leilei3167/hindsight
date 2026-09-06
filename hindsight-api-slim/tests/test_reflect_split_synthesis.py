@@ -395,16 +395,21 @@ class TestSplitSynthesisAgentFlow:
                 # We don't know chunk count up front. Fail only the very first map
                 # call, succeed thereafter — exercises one retry path.
                 if map_attempts["n"] == 1:
-                    return (
-                        NO_RELEVANT_EVIDENCE_SENTINEL,
-                        TokenUsage(input_tokens=10, output_tokens=6, total_tokens=16),
+                    return LLMCallResult(
+                        content=NO_RELEVANT_EVIDENCE_SENTINEL,
+                        usage=TokenUsage(input_tokens=10, output_tokens=6, total_tokens=16),
                     )
-                return (
-                    f"- recovered claim {map_attempts['n']} "
-                    "(mentioned_at: 2026-01-01; occurred: unknown; memory_ids: mem-1)",
-                    TokenUsage(input_tokens=10, output_tokens=5, total_tokens=15),
+                return LLMCallResult(
+                    content=(
+                        f"- recovered claim {map_attempts['n']} "
+                        "(mentioned_at: 2026-01-01; occurred: unknown; memory_ids: mem-1)"
+                    ),
+                    usage=TokenUsage(input_tokens=10, output_tokens=5, total_tokens=15),
                 )
-            return ("Reduced from surviving claims.", TokenUsage(input_tokens=20, output_tokens=10, total_tokens=30))
+            return LLMCallResult(
+                content="Reduced from surviving claims.",
+                usage=TokenUsage(input_tokens=20, output_tokens=10, total_tokens=30),
+            )
 
         llm.call = AsyncMock(side_effect=_call)
 
@@ -446,15 +451,18 @@ class TestSplitSynthesisAgentFlow:
             if "extract evidence" in messages[0]["content"]:
                 user = messages[1]["content"]
                 if '"mem-0"' in user:
-                    return (
-                        NO_RELEVANT_EVIDENCE_SENTINEL,
-                        TokenUsage(input_tokens=10, output_tokens=6, total_tokens=16),
+                    return LLMCallResult(
+                        content=NO_RELEVANT_EVIDENCE_SENTINEL,
+                        usage=TokenUsage(input_tokens=10, output_tokens=6, total_tokens=16),
                     )
-                return (
-                    "- good claim (mentioned_at: 2026-01-01; occurred: unknown; memory_ids: mem-50)",
-                    TokenUsage(input_tokens=10, output_tokens=5, total_tokens=15),
+                return LLMCallResult(
+                    content="- good claim (mentioned_at: 2026-01-01; occurred: unknown; memory_ids: mem-50)",
+                    usage=TokenUsage(input_tokens=10, output_tokens=5, total_tokens=15),
                 )
-            return ("Answer from remaining evidence.", TokenUsage(input_tokens=20, output_tokens=10, total_tokens=30))
+            return LLMCallResult(
+                content="Answer from remaining evidence.",
+                usage=TokenUsage(input_tokens=20, output_tokens=10, total_tokens=30),
+            )
 
         llm.call = AsyncMock(side_effect=_call)
 
@@ -491,11 +499,14 @@ class TestSplitSynthesisAgentFlow:
 
         async def _call(messages, **kwargs):
             if "extract evidence" in messages[0]["content"]:
-                return (
-                    NO_RELEVANT_EVIDENCE_SENTINEL,
-                    TokenUsage(input_tokens=10, output_tokens=6, total_tokens=16),
+                return LLMCallResult(
+                    content=NO_RELEVANT_EVIDENCE_SENTINEL,
+                    usage=TokenUsage(input_tokens=10, output_tokens=6, total_tokens=16),
                 )
-            return ("should not reach reduce", TokenUsage(input_tokens=1, output_tokens=1, total_tokens=2))
+            return LLMCallResult(
+                content="should not reach reduce",
+                usage=TokenUsage(input_tokens=1, output_tokens=1, total_tokens=2),
+            )
 
         llm.call = AsyncMock(side_effect=_call)
 
