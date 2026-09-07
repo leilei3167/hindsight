@@ -547,23 +547,25 @@ async def any_memory_updated_since_batch(
 
     The knowledge tree and the mental-model list ask this for every model in the
     bank on a poll, and one round-trip each is what made the exact answer look
-    expensive — the scans themselves are microseconds once
-    ``idx_memory_units_bank_updated_at`` exists. Scopes are grouped by the tag
-    clause they generate (a bank's pages almost always share one), each group is
-    joined against its scope set as JSON, and every group is a single prepared
-    plan however many pages it covers.
+    expensive. Scopes are grouped by the tag clause they generate (a bank's pages
+    almost always share one), each group is joined against its scope set as JSON,
+    and every group is a single prepared plan however many pages it covers.
 
-    Two details in the SQL are load-bearing:
+    The LATERAL shape depends on whether the group has a tag filter:
 
-    * ``ORDER BY mu.updated_at DESC`` inside the LATERAL. It does not change the
-      answer — we only ask whether a row exists — but without it the planner
-      estimates the ``LIMIT 1`` will be satisfied early, picks a sequential scan,
-      and the whole point is lost (measured: 13 ms per scope instead of 0.03 ms).
-      The ORDER BY makes the ``(bank_id, updated_at DESC)`` index the obvious way
-      to run the join, which is also the cheapest.
+    * Untagged scopes keep ``ORDER BY mu.updated_at DESC LIMIT 1`` so the planner
+      walks ``idx_memory_units_bank_updated_at`` and stops at the first hit — the
+      common positive case for a whole-bank watermark.
+    * Tagged scopes use ``bool_or(mu.updated_at > s.since)`` with the tag
+      predicate in ``WHERE`` (and *without* an ``updated_at`` range predicate).
+      Putting ``updated_at > s.since`` in the aggregate lets Postgres drive from
+      ``idx_memory_units_tags`` instead of walking every newer bank row and
+      rejecting off-tag ones. That negative case is the common one once a bank is
+      mostly caught up, and the btree walk was timing out ``GET /mental-models``
+      under production load (#4169).
     * ``LEFT JOIN LATERAL`` rather than a correlated ``EXISTS``. A scalar subquery
       over a function scan gets no useful row estimate and falls back to a
-      sequential scan for the same reason.
+      sequential scan.
 
     Compound ``tag_groups`` scopes cannot be expressed against a joined row, so
     they fall back to one :func:`any_memory_updated_since` each — they are rare,
@@ -571,9 +573,7 @@ async def any_memory_updated_since_batch(
 
     Postgres only. This module backs both SQL dialects, and Oracle reaches it
     through a regex rewriter that does not model ``jsonb_to_recordset`` or
-    ``LATERAL``, so an Oracle connection takes the same per-scope path. It is the
-    round-trips that are saved here, not the scans — the scans are cheap on both
-    dialects once the ``(bank_id, updated_at)`` index exists.
+    ``LATERAL``, so an Oracle connection takes the same per-scope path.
     """
     if not scopes:
         return {}
@@ -631,29 +631,44 @@ async def any_memory_updated_since_batch(
             }
             for scope in group
         ]
+        # Tagged scopes: GIN-friendly aggregate (see docstring). Untagged scopes:
+        # keep the btree early-exit plan that #3589 tuned for the whole-bank case.
+        if tag_clause:
+            lateral = f"""
+                SELECT bool_or(mu.updated_at > s.since) AS hit
+                FROM {table} mu
+                WHERE mu.bank_id = $1
+                  {tag_clause}
+                  AND (s.fact_types IS NULL OR mu.fact_type = ANY(s.fact_types))
+            """
+            select_stale = "COALESCE(h.hit, false) AS stale"
+        else:
+            lateral = f"""
+                SELECT 1 AS hit
+                FROM {table} mu
+                WHERE mu.bank_id = $1
+                  AND mu.updated_at > s.since
+                  AND (s.fact_types IS NULL OR mu.fact_type = ANY(s.fact_types))
+                ORDER BY mu.updated_at DESC
+                LIMIT 1
+            """
+            select_stale = "(h.hit IS NOT NULL) AS stale"
         rows = await conn.fetch(
             f"""
-            SELECT s.scope_key, (h.hit IS NOT NULL) AS stale
+            SELECT s.scope_key, {select_stale}
             FROM jsonb_to_recordset($2::jsonb)
                  -- `tags` must be varchar[], matching memory_units.tags: there is no
                  -- `varchar[] @> text[]` operator, so a text[] column here fails to
                  -- resolve the containment operators the tag clauses are built from.
                  AS s(scope_key text, since timestamptz, tags varchar[], fact_types text[])
             LEFT JOIN LATERAL (
-                SELECT 1 AS hit
-                FROM {table} mu
-                WHERE mu.bank_id = $1
-                  AND mu.updated_at > s.since
-                  {tag_clause}
-                  AND (s.fact_types IS NULL OR mu.fact_type = ANY(s.fact_types))
-                ORDER BY mu.updated_at DESC
-                LIMIT 1
+                {lateral}
             ) h ON TRUE
             """,
             bank_id,
             json.dumps(payload),
         )
-        results.update({row["scope_key"]: row["stale"] for row in rows})
+        results.update({row["scope_key"]: bool(row["stale"]) for row in rows})
 
     return results
 

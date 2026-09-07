@@ -1401,9 +1401,14 @@ class TestMentalModelStaleness:
             ("untagged", None, None),
             ("flat-default", ["user_a"], None),
             ("flat-any", ["user_a", "user_b"], {"tags_match": "any"}),
+            ("flat-all", ["user_a", "user_b"], {"tags_match": "all"}),
+            ("flat-any-strict", ["user_a"], {"tags_match": "any_strict"}),
             ("flat-strict", ["user_a", "team_red"], {"tags_match": "all_strict"}),
             ("fact-typed", ["user_a"], {"fact_types": ["world"]}),
             ("grouped", None, {"tag_groups": [{"and": [{"tags": ["user_a"]}, {"tags": ["proj_x"]}]}]}),
+            # Quiet tagged scope: watermark after the only in-scope write so the
+            # batch negative path (GIN / bool_or) must still agree with one-at-a-time.
+            ("quiet-strict", ["quiet_tag"], {"tags_match": "all_strict"}),
         ]
         models = {}
         for name, tags, trigger in specs:
@@ -1421,9 +1426,16 @@ class TestMentalModelStaleness:
         # a batch that returned one blanket answer would still pass otherwise.
         await self._insert_memory(memory, bank_id, tags=["user_a"], fact_type="experience")
         await self._insert_memory(memory, bank_id, tags=["user_b", "proj_x"], fact_type="world")
+        await self._insert_memory(memory, bank_id, tags=["quiet_tag"], fact_type="world")
 
         pool = await memory._get_pool()
         async with pool.acquire() as conn:
+            await conn.execute(
+                f"UPDATE {fq_table('mental_models')} SET last_refreshed_at = NOW() "
+                f"WHERE bank_id = $1 AND id = $2",
+                bank_id,
+                models["quiet-strict"]["id"],
+            )
             rows = {
                 name: await conn.fetchrow(
                     f"SELECT id, tags, trigger, last_refreshed_at, last_memory_seen_at "
