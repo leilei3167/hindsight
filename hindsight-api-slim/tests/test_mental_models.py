@@ -1431,8 +1431,7 @@ class TestMentalModelStaleness:
         pool = await memory._get_pool()
         async with pool.acquire() as conn:
             await conn.execute(
-                f"UPDATE {fq_table('mental_models')} SET last_refreshed_at = NOW() "
-                f"WHERE bank_id = $1 AND id = $2",
+                f"UPDATE {fq_table('mental_models')} SET last_refreshed_at = NOW() WHERE bank_id = $1 AND id = $2",
                 bank_id,
                 models["quiet-strict"]["id"],
             )
