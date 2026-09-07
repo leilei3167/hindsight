@@ -175,10 +175,7 @@ describe("dshSessionEvents (alpha.4+ transcript source)", () => {
   ];
 
   it("reads snapshotEvents when the legacy events property is absent", () => {
-    const session = {
-      header: { id: "s-alpha4", cwd: "/repo" },
-      snapshotEvents: () => sampleEvents,
-    };
+    const session = { snapshotEvents: () => sampleEvents };
     expect(dshSessionEvents(session)).toEqual(sampleEvents);
     expect(readDshEvents(dshSessionEvents(session))).toEqual([
       {
@@ -195,26 +192,19 @@ describe("dshSessionEvents (alpha.4+ transcript source)", () => {
   });
 
   it("falls back to the legacy events property when snapshotEvents is missing", () => {
-    const session = {
-      header: { id: "s-legacy", cwd: "/repo" },
-      events: sampleEvents,
-    };
+    const session = { events: sampleEvents };
     expect(dshSessionEvents(session)).toBe(sampleEvents);
     expect(readDshEvents(dshSessionEvents(session))).toHaveLength(2);
   });
 
   it("returns an empty log when neither accessor exists (pre-fix alpha.4 breakage)", () => {
-    const session = { header: { id: "s-broken", cwd: "/repo" } };
+    const session = {};
     expect(dshSessionEvents(session)).toEqual([]);
     expect(readDshEvents(dshSessionEvents(session))).toEqual([]);
   });
 
   it("prefers snapshotEvents over a stale events property", () => {
-    const session = {
-      header: { id: "s-both", cwd: "/repo" },
-      events: [],
-      snapshotEvents: () => sampleEvents,
-    };
+    const session = { events: [], snapshotEvents: () => sampleEvents };
     expect(dshSessionEvents(session)).toBe(sampleEvents);
   });
 });
